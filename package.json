@@ -1,0 +1,19 @@
+{
+  "name": "pops",
+  "module": "bin/pops.ts",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "pops": "bin/pops.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "cac": "^7.0.0",
+    "proper-lockfile": "^4.1.2"
+  }
+}

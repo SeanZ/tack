@@ -1,0 +1,7 @@
+{
+  "data_dir": "~/.pops/data",
+  "default_target": "cc",
+  "repos": {
+    "myrepo": "/absolute/path/to/your/repo"
+  }
+}

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>pops · dashboard</title>
+  <script>
+    // no-flash theme: set before first paint (saved choice, else system)
+    (function () {
+      try {
+        var s = localStorage.getItem("pops-theme");
+        var t = s || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://api.fontshare.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <span class="wordmark">pops</span>
+      <span class="brand-sub" id="brandSub">loading…</span>
+    </div>
+    <div class="topbar-right">
+      <span class="span-range" id="spanRange"></span>
+      <span class="pulse" id="pulse" title="auto-refresh"></span>
+      <span class="updated" id="updated">—</span>
+      <button class="theme-toggle" id="themeToggle" title="切换主题 (亮/暗)" aria-label="切换主题">
+        <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="tiles" id="tiles"></section>
+
+    <section class="board" id="board"></section>
+
+    <section class="dists">
+      <div class="dist-card">
+        <h3 class="dist-title">主线 lane</h3>
+        <div class="bars" id="laneBars"></div>
+      </div>
+      <div class="dist-card">
+        <h3 class="dist-title">仓库 repo</h3>
+        <div class="bars" id="repoBars"></div>
+      </div>
+      <div class="dist-card">
+        <h3 class="dist-title">贡献归属 target</h3>
+        <div class="bars" id="targetBars"></div>
+      </div>
+    </section>
+
+    <section class="chart-card">
+      <div class="chart-head">
+        <h3 class="dist-title">吞吐量 throughput</h3>
+        <div class="chart-summary" id="chartSummary"></div>
+        <div class="seg" id="rangeToggle">
+          <button class="seg-btn is-on" data-range="day">按日</button>
+          <button class="seg-btn" data-range="week">按周</button>
+        </div>
+      </div>
+      <div class="chart-legend">
+        <span class="lg lg-created"><i></i>创建</span>
+        <span class="lg lg-archived"><i></i>归档</span>
+        <span class="lg lg-open"><i></i>未完成 (燃尽)</span>
+      </div>
+      <div class="chart-body" id="throughputChart"></div>
+      <div class="chart-lanes" id="chartLanes"></div>
+      <div class="lane-detail" id="laneDetail" hidden></div>
+    </section>
+
+    <footer class="foot">
+      <span>pops dashboard · 只读视图 · 增删改走 CLI / skill</span>
+    </footer>
+  </main>
+
+  <div class="drawer-scrim" id="scrim"></div>
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-inner" id="drawerInner"></div>
+  </aside>
+
+  <script src="/app.js"></script>
+</body>
+</html>
