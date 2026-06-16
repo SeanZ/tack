@@ -47,7 +47,8 @@ pops init
 pops setup cc
 
 # 可选：装配套 skill，让 AI 助手能用自然语言驱动 pops
-cp -R skills/pops ~/.claude/skills/
+# 软链而非拷贝，repo 即真源，改一处全生效（多个 agent 共享同一份）
+ln -s "$PWD/skills/pops" ~/.claude/skills/pops
 ```
 
 确认 `~/.local/bin` 在 PATH 上(`which pops` 能找到)。
@@ -63,7 +64,7 @@ cp -R skills/pops ~/.claude/skills/
 5. **初始化**:`pops init`(创建 `~/.pops/config.json` + git 化的 `~/.pops/data`)。
 6. **填配置(可选)**:如果用户有常用 repo,把别名写进 `~/.pops/config.json` 的 `repos`(参考 `config.example.json`)。这是本机私有配置,不要进任何 git。
 7. **装钩子(可选)**:`pops setup cc`(会备份并改 `~/.claude/settings.json`,幂等)。
-8. **装 skill(可选)**:`cp -R skills/pops ~/.claude/skills/`,让自然语言入口生效。
+8. **装 skill(可选)**:`ln -s "$PWD/skills/pops" ~/.claude/skills/pops`(软链而非拷贝,repo 即真源,改一处全生效),让自然语言入口生效。
 9. **数据备份(建议)**:`~/.pops/data` 已是 git 仓,引导用户加一个**个人 private 远端**并 push,这样换机器也不丢数据。
 10. **验证**:`pops init` 后跑 `pops add "hello" && pops ls`,看到任务即成功;随后 `pops mv <id> archived` 清理。
 
@@ -85,7 +86,7 @@ cp -R skills/pops ~/.claude/skills/
 不想背命令,就跟装了 `pops` skill 的 AI 助手说话:"加一条 backlog""今天有啥在推进""把当前会话归档"。下面是底层命令速查:
 
 ```bash
-pops add "<title>" [--tag a,b] [--repo r] [--target cc|trae|self] [--box b]
+pops add "<title>" [--tag a,b] [--repo r] [--target <agent>] [--box b]
 pops ls [box] [--tag t] [--repo r] [--all] [--json]
 pops show <id> [--json]
 pops mv <id> <box>              # inbox / processing / backlog / archived

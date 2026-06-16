@@ -32,12 +32,26 @@ function resolveDataRoot(): string {
 }
 
 type Box = "inbox" | "processing" | "backlog" | "archived";
-type Agent = "cc" | "trae" | "codex";
-type Target = "cc" | "trae" | "self";
+// Agent / Target are free-form strings. `cc` and `self` are built-in concepts
+// (cc has native session hooks; self = the user). Any other agent (a relay AI,
+// another IDE, …) is declared per-machine in config.agents — the tool stays
+// agent-agnostic; the list of agents you collaborate with is private context.
+type Agent = string;
+type Target = string;
 
 const BOXES: Box[] = ["inbox", "processing", "backlog", "archived"];
-const AGENTS: Agent[] = ["cc", "trae", "codex"];
-const TARGETS: Target[] = ["cc", "trae", "self"];
+const BUILTIN_AGENTS = ["cc"];
+const BUILTIN_TARGETS = ["cc", "self"];
+
+// Known agents/targets = built-ins ∪ config.agents. Only WRITE paths
+// (add --target / set target= / link --agent) validate against these; reads
+// and derivation never validate, so existing data with any value is safe.
+function knownAgents(cfg: any): string[] {
+  return [...BUILTIN_AGENTS, ...(Array.isArray(cfg?.agents) ? cfg.agents : [])];
+}
+function knownTargets(cfg: any): string[] {
+  return [...BUILTIN_TARGETS, ...(Array.isArray(cfg?.agents) ? cfg.agents : [])];
+}
 
 interface SessionLink {
   uuid: string;
@@ -137,15 +151,24 @@ async function loadConfig(): Promise<any> {
   return await Bun.file(CONFIG_FILE).json();
 }
 
-// Effective contribution target: explicit value wins; otherwise derive `trae`
-// from handoff signals (handoff_path set, or awaiting:trae / ai-handoff tag).
-// Single source of truth = the signals; remove the signal and the derived
-// target disappears. Returns the value plus whether it was derived.
-function effectiveTarget(t: Task): { value?: Target; derived: boolean } {
+// Effective contribution target (agent-agnostic; no agent name hardcoded):
+//   1. explicit contribution_target wins
+//   2. else first `awaiting:<agent>` tag where agent != "review" → that agent
+//      (awaiting:review is a status, not an agent, so it never derives)
+//   3. else if the task carries a handoff signal (handoff_path set, or the
+//      generic `ai-handoff` tag) → config.default_handoff_target, if configured
+// Remove the signal and the derived target disappears. The agent a bare handoff
+// defaults to is private config, not a literal in the engine.
+function effectiveTarget(t: Task, cfg?: any): { value?: Target; derived: boolean } {
   if (t.contribution_target) return { value: t.contribution_target, derived: false };
-  const hasHandoffSignal =
-    !!t.handoff_path || t.tags.includes("awaiting:trae") || t.tags.includes("ai-handoff");
-  if (hasHandoffSignal) return { value: "trae", derived: true };
+  const awaiting = t.tags.find((g) => g.startsWith("awaiting:"));
+  if (awaiting) {
+    const who = awaiting.slice("awaiting:".length);
+    if (who && who !== "review") return { value: who, derived: true };
+  }
+  const hasHandoffSignal = !!t.handoff_path || t.tags.includes("ai-handoff");
+  if (hasHandoffSignal && cfg?.default_handoff_target)
+    return { value: cfg.default_handoff_target, derived: true };
   return { value: undefined, derived: false };
 }
 
@@ -175,9 +198,10 @@ function ensureBox(box: string): Box {
   return box as Box;
 }
 
-function ensureAgent(s: string): Agent {
-  if (!AGENTS.includes(s as Agent)) die(`invalid agent: ${s} (valid: ${AGENTS.join("/")})`);
-  return s as Agent;
+function ensureAgent(s: string, cfg: any): Agent {
+  const known = knownAgents(cfg);
+  if (!known.includes(s)) die(`unknown agent: ${s} (valid: ${known.join("/")}; add more to config.agents)`);
+  return s;
 }
 
 function shortTags(tags: string[]): string {
@@ -316,15 +340,16 @@ cli
   .command("add <title>", "Add a new task")
   .option("--tag <tags>", "Comma-separated tags")
   .option("--repo <repo>", "Repo alias or path")
-  .option("--target <target>", "Contribution target (cc/trae/self)")
+  .option("--target <target>", "Contribution target (cc/self built-in; others from config.agents)")
   .option("--ref <url>", "External reference URL")
   .option("--box <box>", "Initial box (default: inbox)")
   .option("--json", "Output JSON")
   .action(async (title: string, opts: any) => {
     const tasks = await loadTasks();
+    const cfg = await loadConfig();
     const box: Box = opts.box ? ensureBox(opts.box) : "inbox";
-    if (opts.target && !TARGETS.includes(opts.target))
-      die(`invalid target: ${opts.target} (valid: ${TARGETS.join("/")})`);
+    if (opts.target && !knownTargets(cfg).includes(opts.target))
+      die(`unknown target: ${opts.target} (valid: ${knownTargets(cfg).join("/")}; add more to config.agents)`);
     const tags = opts.tag
       ? opts.tag
           .split(",")
@@ -364,6 +389,7 @@ cli
   .option("--json", "Output JSON")
   .action(async (box: string | undefined, opts: any) => {
     let tasks = await loadTasks();
+    const cfg = await loadConfig();
     if (opts.all) {
       // no filter
     } else if (box === "active" || (!box && !opts.all)) {
@@ -374,7 +400,7 @@ cli
     }
     if (opts.tag) tasks = tasks.filter((t) => t.tags.includes(opts.tag));
     if (opts.repo) tasks = tasks.filter((t) => t.repo === opts.repo);
-    if (opts.target) tasks = tasks.filter((t) => effectiveTarget(t).value === opts.target);
+    if (opts.target) tasks = tasks.filter((t) => effectiveTarget(t, cfg).value === opts.target);
     tasks.sort((a, b) => a.id.localeCompare(b.id));
     if (opts.json) {
       console.log(JSON.stringify(tasks));
@@ -398,6 +424,7 @@ cli
   .option("--json", "Output JSON")
   .action(async (id: string, opts: any) => {
     const tasks = await loadTasks();
+    const cfg = await loadConfig();
     const task = findTask(id, tasks);
     if (opts.json) {
       console.log(JSON.stringify(task));
@@ -407,7 +434,7 @@ cli
     console.log(`State:    ${task.state}`);
     if (task.repo) console.log(`Repo:     ${task.repo}`);
     {
-      const et = effectiveTarget(task);
+      const et = effectiveTarget(task, cfg);
       if (et.value) console.log(`Target:   ${et.value}${et.derived ? " (derived from handoff signal)" : ""}`);
     }
     if (task.ref) console.log(`Ref:      ${task.ref}`);
@@ -507,10 +534,11 @@ const ALLOWED_SET_KEYS = new Set([
   "state",
 ]);
 
-cli.command("set <id> [...kvs]", "Set fields (e.g. repo=tq target=trae state=processing)").action(
+cli.command("set <id> [...kvs]", "Set fields (e.g. repo=tq target=self state=processing)").action(
   async (id: string, kvs: string[]) => {
     if (!kvs.length) die(`no key=value pairs given`);
     const tasks = await loadTasks();
+    const cfg = await loadConfig();
     const task = findTask(id, tasks);
     const prevState = task.state;
     for (const kv of kvs) {
@@ -521,8 +549,8 @@ cli.command("set <id> [...kvs]", "Set fields (e.g. repo=tq target=trae state=pro
       if (k === "target") k = "contribution_target";
       if (!ALLOWED_SET_KEYS.has(k)) die(`unsupported field: ${k}`);
       if (k === "state") ensureBox(v);
-      if (k === "contribution_target" && !TARGETS.includes(v as Target))
-        die(`invalid target: ${v}`);
+      if (k === "contribution_target" && !knownTargets(cfg).includes(v))
+        die(`unknown target: ${v} (valid: ${knownTargets(cfg).join("/")}; add more to config.agents)`);
       (task as any)[k] = v;
     }
     task.updated_at = isoNow();
@@ -540,7 +568,7 @@ cli
   .command("link", "Link a session to a task (idempotent; used by hooks)")
   .option("--task <id>", "Task ID")
   .option("--session <uuid>", "Session UUID")
-  .option("--agent <agent>", "Agent (cc/trae/codex)", { default: "cc" })
+  .option("--agent <agent>", "Agent (cc built-in; others from config.agents)", { default: "cc" })
   .option("--transcript-path <path>", "Transcript file path")
   .action(async (opts: any) => {
     if (!opts.task) die(`--task required`);
@@ -549,7 +577,8 @@ cli
     if (!uuid) die(`--session required (or run inside a CC session)`);
     const transcriptPath =
       opts.transcriptPath ?? (uuid === cur?.uuid ? cur?.transcriptPath : undefined);
-    const agent = ensureAgent(opts.agent);
+    const cfg = await loadConfig();
+    const agent = ensureAgent(opts.agent, cfg);
     const tasks = await loadTasks();
     const task = findTask(opts.task, tasks);
     const isNew = linkSession(task, uuid, agent, transcriptPath);
@@ -706,10 +735,11 @@ cli
   .command("brief <id>", "Print a compact task brief for context injection (used by SessionStart hook)")
   .action(async (id: string) => {
     const tasks = await loadTasks();
+    const cfg = await loadConfig();
     const task = findTask(id, tasks);
     const lines: string[] = [];
     lines.push(`# pops task ${task.id} — ${task.title}`);
-    const et = effectiveTarget(task);
+    const et = effectiveTarget(task, cfg);
     lines.push(`state: ${task.state}` + (task.repo ? ` · repo: ${task.repo}` : "") +
       (et.value ? ` · target: ${et.value}` : ""));
     if (task.tags.length) lines.push(`tags: ${task.tags.map((t) => "#" + t).join(" ")}`);
@@ -816,10 +846,8 @@ cli
   .action(async (target: string) => {
     if (target === "cc") {
       await setupCc();
-    } else if (target === "trae") {
-      die(`trae setup not implemented yet (Phase 3)`);
     } else {
-      die(`unknown setup target: ${target} (valid: cc/trae)`);
+      die(`unknown setup target: ${target} (only 'cc' supported)`);
     }
   });
 
@@ -886,11 +914,11 @@ async function setupCc(): Promise<void> {
 }
 
 // Compute dashboard aggregates from the task list (server-side for /api/data).
-function computeStats(tasks: Task[]) {
+function computeStats(tasks: Task[], cfg?: any) {
   const box: Record<string, number> = { inbox: 0, processing: 0, backlog: 0, archived: 0 };
   const repo: Record<string, number> = {};
   const lane: Record<string, number> = {};
-  const target: Record<string, number> = { trae: 0, self: 0, cc: 0, none: 0 };
+  const target: Record<string, number> = {};
   let sessions = 0,
     notes = 0,
     multiSession = 0;
@@ -899,7 +927,7 @@ function computeStats(tasks: Task[]) {
     box[t.state] = (box[t.state] ?? 0) + 1;
     repo[t.repo || "(none)"] = (repo[t.repo || "(none)"] ?? 0) + 1;
     for (const g of t.tags) if (g.startsWith("lane:")) lane[g] = (lane[g] ?? 0) + 1;
-    const et = effectiveTarget(t).value ?? "none";
+    const et = effectiveTarget(t, cfg).value ?? "none";
     target[et] = (target[et] ?? 0) + 1;
     sessions += t.sessions.length;
     notes += t.notes.length;
@@ -1026,7 +1054,7 @@ cli
               const tasks = await loadTasks();
               const enriched = tasks.map((t) => ({
                 ...t,
-                effective_target: effectiveTarget(t),
+                effective_target: effectiveTarget(t, cfg),
                 repo_path: resolveRepo(t.repo, cfg) ?? null,
               }));
               // throughput overall + broken down per lane (主线), so the chart can drill in
@@ -1039,7 +1067,7 @@ cli
               const throughput = { ...computeThroughput(tasks), lanes, byLane };
               const body = JSON.stringify({
                 generated_at: new Date().toISOString(),
-                stats: { ...computeStats(tasks), throughput },
+                stats: { ...computeStats(tasks, cfg), throughput },
                 tasks: enriched,
               });
               return new Response(body, {
