@@ -109,8 +109,8 @@ function render(data) {
   renderBars("repoBars", stats.repo, { color: "var(--inbox)" });
   renderBars(
     "targetBars",
-    { trae: stats.target.trae, self: stats.target.self, cc: stats.target.cc, none: stats.target.none },
-    { color: "var(--processing)", colorMap: { trae: "var(--trae)", none: "var(--backlog)" } }
+    stats.target,
+    { color: "var(--target)", colorMap: { none: "var(--backlog)" } }
   );
 }
 
@@ -177,8 +177,8 @@ function taskCard(t) {
   const lanes = t.tags.filter((g) => g.startsWith("lane:"));
   for (const l of lanes.slice(0, 2)) meta.appendChild(el("span", "chip lane", l.replace("lane:", "")));
   const et = t.effective_target;
-  if (et && et.value === "trae") {
-    meta.appendChild(el("span", "chip trae", et.derived ? "trae~" : "trae"));
+  if (et && et.value) {
+    meta.appendChild(el("span", "chip target", et.derived ? et.value + "~" : et.value));
   }
   c.appendChild(meta);
   return c;
@@ -585,7 +585,7 @@ function fillDrawer(id) {
     const tagWrap = el("div", "c-meta");
     tagWrap.style.marginBottom = "20px";
     for (const g of t.tags) {
-      const cls = g.startsWith("lane:") ? "chip lane" : g.startsWith("awaiting:") ? "chip trae" : "chip";
+      const cls = g.startsWith("lane:") ? "chip lane" : g.startsWith("awaiting:") ? "chip awaiting" : "chip";
       tagWrap.appendChild(el("span", cls, g));
     }
     inner.appendChild(tagWrap);

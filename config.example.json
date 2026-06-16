@@ -1,6 +1,8 @@
 {
   "data_dir": "~/.pops/data",
   "default_target": "cc",
+  "agents": ["agentA", "agentB"],
+  "default_handoff_target": "agentA",
   "repos": {
     "myrepo": "/absolute/path/to/your/repo"
   }

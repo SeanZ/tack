@@ -26,7 +26,7 @@ processing 标题: <最多 3 条>
 所有命令支持 `--json` 输出,机器可读。`pops task <verb> ...` 是 `pops <verb> ...` 的别名,两种写法等价。
 
 ### Capture / Modify
-- `pops add "<title>" [--tag a,b] [--repo r] [--target trae|cc|self] [--ref URL] [--box inbox|backlog|processing]` — 默认进 inbox
+- `pops add "<title>" [--tag a,b] [--repo r] [--target <agent>] [--ref URL] [--box inbox|backlog|processing]` — 默认进 inbox。`--target` 见数据模型 contribution_target(cc/self 内建,其余 agent 在 `~/.pops/config.json` 的 `agents` 声明)
 - `pops mv <id> <box>` — box 切换: inbox / processing / backlog / archived。**移到 archived 时会自动给该 task 已关联的 session 生成 digest 固化**
 - `pops tag <id> [tags...]` — 加 tag (无参数=列出当前 tags)
 - `pops untag <id> [tags...]` — 删 tag
@@ -64,17 +64,18 @@ Task {
   state: inbox | processing | backlog | archived
   tags: string[]              // 自由,约定前缀:
                               //   lane:<主线名>                      → 主线归属
-                              //   awaiting:trae / awaiting:review     → 等什么动作
+                              //   awaiting:<agent>                    → 等某 agent 接手(派生 target)
+                              //   awaiting:review                     → 等评审(状态,不派生 target)
   repo?: string               // 别名(优先) 或绝对路径
-  contribution_target?: cc | trae | self   // commit 期望归属
+  contribution_target?: <agent>   // commit 期望归属(cc/self 内建,其余见 config.agents)
   ref?: string                // 外部链接 / 群 id / 帖子
-  handoff_path?: string       // repo 内 handoff 文档相对路径
+  handoff_path?: string       // repo 内 handoff 文档相对路径(交接给另一个 agent 时的指针)
   notes: { at, text }[]
   sessions: { uuid, agent, started_at, transcript_path }[]  // pops note 在会话中自动写,或手动 link
 }
 ```
 
-**contribution_target 自动推导**: 这个字段一般不手动标。pops 读时自动推导:task 只要有 `handoff_path` / `awaiting:trae` tag / `ai-handoff` tag 任一信号,`pops show`/`ls --target trae` 就把它当 target=trae。识别到一个任务要委托别的 agent 接力时,给它打 `awaiting:trae` 或设 `handoff_path`,target 自动出来;删了信号 target 自动消失。
+**contribution_target 自动推导**: 这个字段一般不手动标。pops 读时自动推导:显式设了就用显式值;否则看第一个 `awaiting:<agent>` tag(`awaiting:review` 除外,那是状态不是 agent)→ target=该 agent。`pops show`/`ls --target <agent>` 都按推导值算。识别到一个任务要委托某 agent 接力时,给它打 `awaiting:<agent>`,target 自动出来;删了 tag target 自动消失。内建 agent 有 `cc`/`self`,其余在 `~/.pops/config.json` 的 `agents` 声明(供 `--target`/`--agent` 写时校验)。
 
 **CC session 存储**: `~/.claude/projects/<encoded-dir>/<uuid>.jsonl`,encoded-dir = repo 绝对路径把 `/` 换成 `-`。当前会话 pops 会自己拼;只有批量收编历史 session 时才需手动拼 transcript-path。
 
@@ -94,7 +95,7 @@ Task {
 1. 这次会话干了啥你最清楚(你就在里面),直接 `pops note <task> "<本次关键产出/决策/下一步>"`。**note 会自动关联当前会话**,无需手动 link / 拼 transcript-path。
 2. 任务真做完要收尾 → `pops mv <task> archived`,**归档会自动给本会话生成 digest** 固化进数据仓。
 3. 还不知道归哪个 task → `pops which $CLAUDE_CODE_SESSION_ID` 看是否已归属;未归属且是新事 → `pops add "..." --repo <当前 repo> --box processing` 再 `pops note`。**先把判断说给用户确认再落库**。
-4. 产出是给别的 agent 接力的 handoff → 打 `awaiting:trae` tag 或 `set handoff_path=...`,target 自动推导。
+4. 产出是给别的 agent 接力的 handoff → 打 `awaiting:<agent>` tag 或 `set handoff_path=...`,target 自动推导。
 
 **"triage 一下 session / 整理未归类会话"** → **批量**收编历史孤儿 session:
 1. `pops scan --json --limit 12`(可加 `--repo <别名>`)拿未关联 session 列表
