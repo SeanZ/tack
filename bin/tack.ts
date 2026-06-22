@@ -94,25 +94,6 @@ function todayYYMMDD(): string {
   return `${yy}${mm}${dd}`;
 }
 
-// Local-date key (YYYY-MM-DD) — lexicographic order matches chronological order.
-function ymd(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-function dayKeyOf(iso: string): string {
-  return ymd(new Date(iso));
-}
-// Monday of the week containing d, at local midnight.
-function mondayKeyOf(iso: string): string {
-  const d = new Date(iso);
-  d.setHours(0, 0, 0, 0);
-  const dow = (d.getDay() + 6) % 7; // 0 = Monday
-  d.setDate(d.getDate() - dow);
-  return ymd(d);
-}
-
 async function loadTasks(): Promise<Task[]> {
   if (!existsSync(TASKS_FILE)) return [];
   const file = Bun.file(TASKS_FILE);
@@ -953,72 +934,6 @@ function computeStats(tasks: Task[], cfg?: any) {
   };
 }
 
-// Throughput / burndown series for the dashboard chart.
-// Buckets created (created_at) vs archived (archived state, by updated_at) per
-// period, plus `open` = running count of not-yet-archived tasks (the burndown
-// line). Returns daily (last 30d) and weekly (last 12w) windows.
-function computeThroughput(tasks: Task[]) {
-  type Ev = { created: number; archived: number };
-
-  // Build a continuous, zero-filled series over `buckets` (sorted keys).
-  // baseline open count = tasks opened before the window and not archived before it.
-  const build = (keyOf: (iso: string) => string, buckets: string[]) => {
-    const startKey = buckets[0];
-    const map = new Map<string, Ev>();
-    let baseOpen = 0;
-    for (const t of tasks) {
-      const ck = t.created_at ? keyOf(t.created_at) : null;
-      const ak = t.state === "archived" && t.updated_at ? keyOf(t.updated_at) : null;
-      if (ck) {
-        if (ck < startKey) baseOpen++;
-        else {
-          const e = map.get(ck) ?? { created: 0, archived: 0 };
-          e.created++;
-          map.set(ck, e);
-        }
-      }
-      if (ak) {
-        if (ak < startKey) baseOpen--;
-        else {
-          const e = map.get(ak) ?? { created: 0, archived: 0 };
-          e.archived++;
-          map.set(ak, e);
-        }
-      }
-    }
-    let open = baseOpen;
-    return buckets.map((key) => {
-      const e = map.get(key) ?? { created: 0, archived: 0 };
-      open += e.created - e.archived;
-      return { key, created: e.created, archived: e.archived, open };
-    });
-  };
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const dayBuckets: string[] = [];
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    dayBuckets.push(ymd(d));
-  }
-
-  const weekBuckets: string[] = [];
-  const thisMonday = new Date(today);
-  thisMonday.setDate(thisMonday.getDate() - ((thisMonday.getDay() + 6) % 7));
-  for (let i = 11; i >= 0; i--) {
-    const d = new Date(thisMonday);
-    d.setDate(d.getDate() - i * 7);
-    weekBuckets.push(ymd(d));
-  }
-
-  return {
-    day: build(dayKeyOf, dayBuckets),
-    week: build(mondayKeyOf, weekBuckets),
-  };
-}
-
 cli
   .command("web", "Start a local dashboard server (foreground; Ctrl+C to stop)")
   .option("--port <n>", "Port to listen on")
@@ -1057,17 +972,9 @@ cli
                 effective_target: effectiveTarget(t, cfg),
                 repo_path: resolveRepo(t.repo, cfg) ?? null,
               }));
-              // throughput overall + broken down per lane (主线), so the chart can drill in
-              const laneSet = new Set<string>();
-              for (const t of tasks) for (const g of t.tags) if (g.startsWith("lane:")) laneSet.add(g);
-              const lanes = [...laneSet].sort();
-              const byLane: Record<string, ReturnType<typeof computeThroughput>> = {};
-              for (const lane of lanes)
-                byLane[lane] = computeThroughput(tasks.filter((t) => t.tags.includes(lane)));
-              const throughput = { ...computeThroughput(tasks), lanes, byLane };
               const body = JSON.stringify({
                 generated_at: new Date().toISOString(),
-                stats: { ...computeStats(tasks, cfg), throughput },
+                stats: computeStats(tasks, cfg),
                 tasks: enriched,
               });
               return new Response(body, {

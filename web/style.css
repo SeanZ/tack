@@ -32,6 +32,9 @@
   --grain-opacity: .35;
   --glow-amber: rgba(255,176,32,.05);
   --glow-blue:  rgba(91,157,255,.04);
+  /* activity heatmap intensity ramp (0 = empty) */
+  --hl0: #20242b; --hl1: #16432e; --hl2: #1f6b45; --hl3: #2f9c63; --hl4: #46d088;
+  --hm-ring: rgba(255,255,255,.05); /* subtle per-cell border for definition */
 }
 
 /* light — warm paper, ink text, deeper amber for contrast */
@@ -56,6 +59,8 @@
   --grain-opacity: .14;
   --glow-amber: rgba(181,121,12,.06);
   --glow-blue:  rgba(47,111,224,.05);
+  --hl0: #E8EBE6; --hl1: #C2E5CC; --hl2: #88CDA1; --hl3: #46A86C; --hl4: #1E7A45;
+  --hm-ring: rgba(27,31,35,.07);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -246,7 +251,7 @@ body {
 .bar-fill { height: 100%; border-radius: 6px; background: var(--accent); transition: width .6s cubic-bezier(.2,.7,.2,1); }
 .bar-val { font-family: var(--mono); font-size: 11.5px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 
-/* ── throughput chart ─────────────────────────────────────── */
+/* ── activity card ────────────────────────────────────────── */
 .chart-card {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--r); padding: 16px 18px 10px; margin-top: 14px;
@@ -272,39 +277,12 @@ body {
 }
 .seg-btn:hover { color: var(--text); }
 .seg-btn.is-on { color: var(--bg); background: var(--accent); font-weight: 700; }
-.chart-legend { display: flex; gap: 16px; margin: 2px 0 6px; }
-.chart-legend .lg { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
-.chart-legend .lg i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-.chart-legend .lg-created i { background: var(--inbox); }
-.chart-legend .lg-archived i { background: var(--archived); }
-.chart-legend .lg-open i { width: 14px; height: 0; border-radius: 0; border-top: 2px solid var(--accent); }
-/* 主线 strip below the chart */
-.chart-lanes { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 12px 0 0; }
-.chart-lanes:empty { display: none; }
-.lanes-label {
-  font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--faint); margin-right: 4px;
-}
-.lane-pill {
-  display: inline-flex; align-items: center; gap: 7px;
-  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
-  background: var(--surface2); border: 1px solid var(--border); border-radius: 20px;
-  padding: 3px 5px 3px 11px; cursor: pointer; transition: color .12s, border-color .12s, background .12s;
-}
-.lane-pill:hover { color: var(--text); border-color: var(--border2); }
-.lane-pill.is-on { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-dim); }
-.lane-pill .lp-num {
-  font-weight: 700; color: var(--text); background: var(--surface); border-radius: 12px;
-  padding: 1px 7px; min-width: 18px; text-align: center; font-variant-numeric: tabular-nums;
-}
-.lane-pill.is-on .lp-num { color: var(--accent); }
-
-/* 主线 detail card */
+/* 区间 detail card (reused by the activity heatmap) */
 .lane-detail {
   margin-top: 12px; padding: 16px 18px;
   background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r);
-  animation: rise .3s cubic-bezier(.2,.7,.2,1) both;
 }
+.lane-detail.ld-pop { animation: rise .26s cubic-bezier(.2,.7,.2,1); } /* one-shot on open */
 .ld-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .ld-name {
   font-family: var(--mono); font-weight: 700; font-size: 14px; color: var(--accent); letter-spacing: .01em;
@@ -332,24 +310,90 @@ body {
 .ld-sub .su-c { color: var(--inbox); } .ld-sub .su-a { color: var(--archived); } .ld-sub .su-n { color: var(--accent); }
 .ld-spark { display: block; width: 100%; margin-top: 10px; }
 
-.chart-body { width: 100%; }
-.tp-svg { display: block; width: 100%; }
-.tp-grid { stroke: var(--border); stroke-width: 1; }
-.tp-axis { fill: var(--faint); font-family: var(--mono); font-size: 9px; }
-.tp-axis-l { text-anchor: end; }
-.tp-axis-r { text-anchor: start; fill: var(--accent); }
-.tp-axis-x { text-anchor: middle; }
-.tp-bar { transition: opacity .12s; }
-.tp-bar:hover { opacity: .75; }
-.tp-bar-c { fill: var(--inbox); }
-.tp-bar-a { fill: var(--archived); }
-.tp-area { fill: var(--accent); opacity: .07; }
-.tp-line { fill: none; stroke: var(--accent); stroke-width: 1.75; stroke-linejoin: round; stroke-linecap: round; }
-.tp-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 1; }
-.tp-val { font-family: var(--mono); font-size: 9px; text-anchor: middle; font-variant-numeric: tabular-nums; }
-.tp-val-c { fill: var(--inbox); }
-.tp-val-a { fill: var(--archived); }
-.tp-val-o { fill: var(--accent); font-weight: 700; }
+/* ── activity heatmap (GitHub-style calendar grid) ────────── */
+.chart-summary .su-p { color: var(--processing); }
+.chart-summary .su-o { color: var(--muted); }
+
+.heatmap { --cell: 11px; --hm-gap: 3px; width: 100%; overflow-x: auto; padding: 4px 0 2px; }
+.hm-board { display: flex; gap: 6px; width: max-content; }
+.hm-days {
+  display: grid; grid-template-rows: repeat(7, var(--cell)); gap: var(--hm-gap);
+  padding-top: 17px; /* clear the month-label row */
+}
+.hm-day {
+  height: var(--cell); line-height: var(--cell); padding-right: 5px; text-align: right;
+  font-family: var(--mono); font-size: 9px; color: var(--faint);
+}
+.hm-main { display: flex; flex-direction: column; gap: var(--hm-gap); }
+.hm-months {
+  display: grid; grid-template-columns: repeat(var(--cols), var(--cell));
+  column-gap: var(--hm-gap); height: 14px;
+}
+.hm-month { font-family: var(--mono); font-size: 9.5px; color: var(--muted); white-space: nowrap; }
+.hm-grid {
+  display: grid; grid-auto-flow: column;
+  grid-template-columns: repeat(var(--cols), var(--cell));
+  grid-template-rows: repeat(7, var(--cell));
+  gap: var(--hm-gap);
+}
+.hm-cell {
+  width: var(--cell); height: var(--cell); border-radius: 2px; background: var(--hl0); cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--hm-ring); /* definition border like GitHub */
+  outline: 1.5px solid transparent; outline-offset: -1.5px; /* transparent base → smooth ring fade */
+  transition: outline-color .1s ease;
+}
+.hm-cell.is-void { background: transparent; box-shadow: none; cursor: default; }
+.hm-cell.l1 { background: var(--hl1); }
+.hm-cell.l2 { background: var(--hl2); }
+.hm-cell.l3 { background: var(--hl3); }
+.hm-cell.l4 { background: var(--hl4); }
+.hm-cell.hm-hot { outline-color: var(--accent); }
+.hm-cell.is-sel { outline-color: var(--text); }
+
+/* floating tooltip (GitHub-style, follows the cursor) */
+.hm-tip {
+  position: fixed; z-index: 20; transform: translate(-50%, -100%);
+  pointer-events: none; opacity: 0; transition: opacity .1s ease;
+  background: var(--bg2); color: var(--text);
+  border: 1px solid var(--border2); border-radius: 7px; padding: 7px 10px;
+  box-shadow: var(--shadow); white-space: nowrap;
+}
+.hm-tip.show { opacity: 1; }
+.hm-tip .tip-d { font-family: var(--mono); font-size: 11px; font-weight: 700; }
+.hm-tip .tip-b { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+.hm-tip .tip-b b { color: var(--accent); }
+.hm-tip .tip-empty { color: var(--faint); }
+
+.hm-legend { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+.hm-foot { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.hm-scale { display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.hm-scale i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.hm-scale .l0 { background: var(--hl0); }
+.hm-scale .l1 { background: var(--hl1); }
+.hm-scale .l2 { background: var(--hl2); }
+.hm-scale .l3 { background: var(--hl3); }
+.hm-scale .l4 { background: var(--hl4); }
+
+/* touched-task list inside the interval detail */
+.ld-stat.is-c .ld-v { color: var(--inbox); }
+.act-list { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.act-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+  text-align: left; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 8px 11px; cursor: pointer; transition: border-color .12s;
+}
+.act-row:hover { border-color: var(--border2); }
+.ar-left { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.ar-id { font-family: var(--mono); font-size: 10.5px; color: var(--accent); flex: none; }
+.ar-title { font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ar-tags { display: flex; gap: 5px; flex: none; }
+.ar-ev {
+  font-family: var(--mono); font-size: 9.5px; padding: 2px 7px; border-radius: 5px;
+  background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+}
+.ar-ev.is-c { color: var(--inbox); }
+.ar-ev.is-arch { color: var(--archived); }
+.ar-ev.is-proc { color: var(--processing); }
 
 .foot { margin-top: 30px; text-align: center; color: var(--faint); font-family: var(--mono); font-size: 11px; }
 

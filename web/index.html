@@ -63,21 +63,20 @@
 
     <section class="chart-card">
       <div class="chart-head">
-        <h3 class="dist-title">吞吐量 throughput</h3>
-        <div class="chart-summary" id="chartSummary"></div>
-        <div class="seg" id="rangeToggle">
-          <button class="seg-btn is-on" data-range="day">按日</button>
-          <button class="seg-btn" data-range="week">按周</button>
+        <h3 class="dist-title">活动 activity</h3>
+        <div class="chart-summary" id="actSummary"></div>
+        <div class="seg" id="actMode">
+          <button class="seg-btn is-on" data-mode="day">按天</button>
+          <button class="seg-btn" data-mode="week">按周</button>
+          <button class="seg-btn" data-mode="month">按月</button>
         </div>
       </div>
-      <div class="chart-legend">
-        <span class="lg lg-created"><i></i>创建</span>
-        <span class="lg lg-archived"><i></i>归档</span>
-        <span class="lg lg-open"><i></i>未完成 (燃尽)</span>
+      <div class="heatmap" id="heatmap"></div>
+      <div class="hm-legend">
+        <span class="hm-foot" id="hmTotal"></span>
+        <span class="hm-scale">少 <i class="l0"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i> 多</span>
       </div>
-      <div class="chart-body" id="throughputChart"></div>
-      <div class="chart-lanes" id="chartLanes"></div>
-      <div class="lane-detail" id="laneDetail" hidden></div>
+      <div class="lane-detail" id="actDetail" hidden></div>
     </section>
 
     <footer class="foot">

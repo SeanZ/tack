@@ -42,8 +42,12 @@ let LAST = null; // last payload, for drawer lookups
 let lastFetchTs = 0;
 let lastSig = null; // signature of last rendered data (skip re-render if unchanged)
 let openTaskId = null; // currently open drawer task, to re-sync on data change
-let chartRange = "day"; // throughput chart granularity: "day" | "week"
-let selectedLane = null; // 主线 whose detail card is open (null = none)
+let actMode = "day"; // activity heatmap granularity: "day" | "week" | "month"
+let actSelected = null; // selected interval id (e.g. "d:2026-06-22"), or null
+let actMap = new Map(); // current per-day activity, for the hover tooltip
+let hotAnchor = null; // cell whose interval is currently highlighted (hover de-dupe)
+let lastDetailKey = null; // last opened interval, to animate the detail card only on open
+let hmTip = null; // floating tooltip element (lazily created on <body>)
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
@@ -104,7 +108,7 @@ function render(data) {
 
   renderTiles(stats);
   renderBoard(tasks, stats);
-  renderThroughput();
+  renderHeatmap();
   renderBars("laneBars", stats.lane, { strip: "lane:", color: "var(--accent)" });
   renderBars("repoBars", stats.repo, { color: "var(--inbox)" });
   renderBars(
@@ -208,82 +212,284 @@ function renderBars(hostId, obj, opts = {}) {
   if (entries.length === 0) host.appendChild(el("div", "empty-note", "—"));
 }
 
-/* ── throughput / burndown chart ─────────────────────────── */
-const SVGNS = "http://www.w3.org/2000/svg";
-const svgEl = (tag, attrs) => {
-  const e = document.createElementNS(SVGNS, tag);
-  for (const k in attrs) e.setAttribute(k, attrs[k]);
-  return e;
-};
+/* ── activity heatmap (GitHub-style calendar grid) ────────── */
+const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]; // rows, Mon..Sun
+const MONTHS = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
+const WEEKS_BACK = 52; // columns of weeks shown (≈ one year)
 
-// "2026-06-08" → "06-08"
-function bucketLabel(key) {
-  return key.slice(5);
+// local YYYY-MM-DD from an ISO/date string (null if unparseable)
+function localKey(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d)) return null;
+  return keyOfDate(d);
+}
+// YYYY-MM-DD for a Date in local time
+function keyOfDate(d) {
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
 }
 
-// per-lane task counts (from the live task list)
-function laneStatsFor(lane) {
-  const out = { total: 0, inbox: 0, processing: 0, backlog: 0, archived: 0 };
-  for (const t of LAST?.tasks || []) {
-    if (t.tags?.includes(lane)) { out.total++; out[t.state] = (out[t.state] ?? 0) + 1; }
+// per-day activity from the live task list: created / archived / sessions / notes.
+// returns Map<"YYYY-MM-DD", {created, archived, sessions, notes, total}>
+function computeActivity(tasks) {
+  const map = new Map();
+  const bump = (iso, field) => {
+    const k = localKey(iso);
+    if (!k) return;
+    let e = map.get(k);
+    if (!e) { e = { created: 0, archived: 0, sessions: 0, notes: 0, total: 0 }; map.set(k, e); }
+    e[field]++; e.total++;
+  };
+  for (const t of tasks) {
+    bump(t.created_at, "created");
+    if (t.state === "archived") bump(t.updated_at, "archived");
+    for (const s of t.sessions || []) bump(s.started_at, "sessions");
+    for (const n of t.notes || []) bump(n.at, "notes");
   }
-  return out;
+  return map;
 }
 
-// 主线 strip below the chart: one pill per lane showing its task count.
-// Clicking a pill toggles an inline detail card — it never rebuilds the chart
-// or the strip itself, so focus is kept and the page does not jump.
-function renderLaneBar() {
-  const host = $("chartLanes");
+// a day's total touches → intensity level 0..4 (fixed buckets)
+function actLevel(total) {
+  if (!total) return 0;
+  if (total <= 1) return 1;
+  if (total <= 3) return 2;
+  if (total <= 6) return 3;
+  return 4;
+}
+
+function renderHeatmap() {
+  const host = $("heatmap");
   if (!host) return;
-  const lanes = LAST?.stats?.throughput?.lanes || [];
-  if (selectedLane && !lanes.includes(selectedLane)) selectedLane = null;
+  const map = computeActivity(LAST?.tasks || []);
+  actMap = map; // expose to the hover tooltip
+  hotAnchor = null; // grid is about to be rebuilt; drop any stale hover anchor
+
+  // window: from the Monday WEEKS_BACK weeks ago, one column of 7 days per week.
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const start = new Date(today);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7)); // this Monday
+  start.setDate(start.getDate() - WEEKS_BACK * 7);
+  const startKey = keyOfDate(start);
+
+  const cols = []; // each = array of 7 Dates (or null for future days)
+  for (let cur = new Date(start); cur <= today; cur.setDate(cur.getDate() + 7)) {
+    const col = [];
+    for (let r = 0; r < 7; r++) {
+      const d = new Date(cur); d.setDate(d.getDate() + r);
+      col.push(d <= today ? d : null);
+    }
+    cols.push(col);
+  }
+
   host.innerHTML = "";
-  if (!lanes.length) { renderLaneDetail(); return; }
 
-  host.appendChild(el("span", "lanes-label", `主线 ${lanes.length}`));
-  for (const l of lanes) {
-    const st = laneStatsFor(l);
-    const pill = el("button", "lane-pill" + (selectedLane === l ? " is-on" : ""));
-    pill.type = "button";
-    pill.appendChild(el("span", "lp-name", l.replace("lane:", "")));
-    pill.appendChild(el("span", "lp-num", String(st.total)));
-    pill.onclick = () => {
-      selectedLane = selectedLane === l ? null : l;
-      for (const p of host.querySelectorAll(".lane-pill")) p.classList.remove("is-on");
-      if (selectedLane === l) pill.classList.add("is-on");
-      renderLaneDetail();
-    };
-    host.appendChild(pill);
-  }
-  renderLaneDetail();
+  // month labels, placed at the column where each month first appears
+  const months = el("div", "hm-months");
+  months.style.setProperty("--cols", cols.length);
+  let lastMonth = -1;
+  cols.forEach((col, ci) => {
+    const top = col.find(Boolean);
+    if (!top) return;
+    if (top.getMonth() !== lastMonth) {
+      lastMonth = top.getMonth();
+      const lbl = el("span", "hm-month", MONTHS[lastMonth]);
+      lbl.style.gridColumn = String(ci + 1); // anchor to the month's first week, let text overflow right
+      months.appendChild(lbl);
+    }
+  });
+
+  // weekday labels (left rail) — show 一/三/五 like GitHub
+  const days = el("div", "hm-days");
+  WEEKDAYS.forEach((w, i) => days.appendChild(el("div", "hm-day", i % 2 === 0 ? w : "")));
+
+  // the cell grid
+  const grid = el("div", "hm-grid");
+  grid.style.setProperty("--cols", cols.length);
+  cols.forEach((col, ci) => {
+    col.forEach((d) => {
+      if (!d) { grid.appendChild(el("div", "hm-cell is-void")); return; }
+      const k = keyOfDate(d);
+      const total = map.get(k)?.total || 0;
+      const cell = el("div", `hm-cell l${actLevel(total)}`);
+      cell.dataset.date = k;
+      cell.dataset.col = String(ci);
+      cell.dataset.ym = k.slice(0, 7);
+      cell.title = `${k} · ${total} 次活动`;
+      grid.appendChild(cell);
+    });
+  });
+
+  const main = el("div", "hm-main");
+  main.appendChild(months);
+  main.appendChild(grid);
+  const board = el("div", "hm-board");
+  board.appendChild(days);
+  board.appendChild(main);
+  host.appendChild(board);
+
+  grid.addEventListener("mousemove", onHmMove);
+  grid.addEventListener("mouseleave", onHmLeave);
+  grid.addEventListener("click", onHmClick);
+
+  renderActSummary(map, startKey);
+  markSelected();
+  renderActDetail();
 }
 
-// inline detail card for the selected 主线
-function renderLaneDetail() {
-  const host = $("laneDetail");
-  if (!host) return;
-  if (!selectedLane) { host.hidden = true; host.innerHTML = ""; return; }
+// the cells sharing the hovered cell's interval, per the current mode
+function intervalCells(cell) {
+  const grid = cell.parentElement;
+  if (actMode === "day") return [cell];
+  if (actMode === "week") return [...grid.querySelectorAll(`.hm-cell[data-col="${cell.dataset.col}"]`)];
+  return [...grid.querySelectorAll(`.hm-cell[data-ym="${cell.dataset.ym}"]`)];
+}
+function sumDates(dates) {
+  const o = { created: 0, archived: 0, sessions: 0, notes: 0, total: 0 };
+  for (const k of dates) {
+    const e = actMap.get(k);
+    if (e) { o.created += e.created; o.archived += e.archived; o.sessions += e.sessions; o.notes += e.notes; o.total += e.total; }
+  }
+  return o;
+}
+function clearHmHot() {
+  for (const c of document.querySelectorAll(".hm-cell.hm-hot")) c.classList.remove("hm-hot");
+}
 
-  const lane = selectedLane;
-  const st = laneStatsFor(lane);
-  const series = LAST?.stats?.throughput?.byLane?.[lane]?.[chartRange] || [];
-  const c = series.reduce((s, d) => s + d.created, 0);
-  const a = series.reduce((s, d) => s + d.archived, 0);
-  const open = series.length ? series[series.length - 1].open : st.total - st.archived;
+// hover: highlight the interval (only when the anchor cell changes) + follow with tooltip
+function onHmMove(e) {
+  const cell = e.target.closest(".hm-cell");
+  if (!cell || cell.classList.contains("is-void")) { onHmLeave(); return; }
+  if (cell !== hotAnchor) {
+    hotAnchor = cell;
+    clearHmHot();
+    const cells = intervalCells(cell);
+    for (const c of cells) c.classList.add("hm-hot");
+    showTip(cells.map((c) => c.dataset.date).filter(Boolean).sort());
+  }
+  moveTip(e.clientX, e.clientY);
+}
+function onHmLeave() {
+  hotAnchor = null;
+  clearHmHot();
+  hideTip();
+}
+
+// floating tooltip — created once, lives on <body>
+function ensureTip() {
+  if (!hmTip) { hmTip = el("div", "hm-tip"); document.body.appendChild(hmTip); }
+  return hmTip;
+}
+function showTip(dates) {
+  const tip = ensureTip();
+  const from = dates[0], to = dates[dates.length - 1];
+  const label = actMode === "day" ? from : actMode === "month" ? from?.slice(0, 7) : `${from} → ${to}`;
+  const s = sumDates(dates);
+  tip.innerHTML =
+    `<div class="tip-d">${label || ""}</div>` +
+    (s.total
+      ? `<div class="tip-b"><b>${s.total}</b> 次活动 · 创建 ${s.created} · 归档 ${s.archived} · 会话 ${s.sessions} · 笔记 ${s.notes}</div>`
+      : `<div class="tip-b tip-empty">无活动</div>`);
+  tip.classList.add("show");
+}
+function moveTip(x, y) {
+  const tip = ensureTip();
+  const pad = 8, half = tip.offsetWidth / 2;
+  tip.style.left = Math.max(pad + half, Math.min(window.innerWidth - pad - half, x)) + "px";
+  tip.style.top = (y - 12) + "px";
+}
+function hideTip() { if (hmTip) hmTip.classList.remove("show"); }
+
+function intervalId(cell) {
+  if (actMode === "day") return "d:" + cell.dataset.date;
+  if (actMode === "week") return "w:" + cell.dataset.col;
+  return "m:" + cell.dataset.ym;
+}
+function onHmClick(e) {
+  const cell = e.target.closest(".hm-cell");
+  if (!cell || cell.classList.contains("is-void")) return;
+  const id = intervalId(cell);
+  actSelected = actSelected === id ? null : id;
+  markSelected();
+  renderActDetail();
+}
+
+// outline the cells of the currently selected interval
+function markSelected() {
+  for (const c of document.querySelectorAll(".hm-cell.is-sel")) c.classList.remove("is-sel");
+  const grid = $("heatmap")?.querySelector(".hm-grid");
+  if (!actSelected || !grid) return;
+  const kind = actSelected[0], val = actSelected.slice(2);
+  const sel =
+    kind === "d" ? `.hm-cell[data-date="${val}"]`
+    : kind === "w" ? `.hm-cell[data-col="${val}"]`
+    : `.hm-cell[data-ym="${val}"]`;
+  for (const c of grid.querySelectorAll(sel)) c.classList.add("is-sel");
+}
+
+// window totals next to the title + the "近一年" footer count
+function renderActSummary(map, startKey) {
+  let c = 0, a = 0, s = 0, nn = 0;
+  for (const [k, e] of map) {
+    if (k < startKey) continue;
+    c += e.created; a += e.archived; s += e.sessions; nn += e.notes;
+  }
+  const sumEl = $("actSummary");
+  if (sumEl) {
+    sumEl.innerHTML =
+      `<span class="su su-c">创建 <b>${c}</b></span>` +
+      `<span class="su su-a">归档 <b>${a}</b></span>` +
+      `<span class="su su-p">会话 <b>${s}</b></span>` +
+      `<span class="su su-o">笔记 <b>${nn}</b></span>`;
+  }
+  const totEl = $("hmTotal");
+  if (totEl) totEl.textContent = `近一年 ${c + a + s + nn} 次活动`;
+}
+
+// inline detail card for the selected day / week / month
+function renderActDetail() {
+  const host = $("actDetail");
+  if (!host) return;
+  const grid = $("heatmap")?.querySelector(".hm-grid");
+  const cells = grid ? [...grid.querySelectorAll(".hm-cell.is-sel")].filter((c) => c.dataset.date) : [];
+  if (!actSelected || !cells.length) { host.hidden = true; host.innerHTML = ""; lastDetailKey = null; return; }
+  const fresh = actSelected !== lastDetailKey; // animate the reveal only on a new interval
+  lastDetailKey = actSelected;
+
+  const dates = cells.map((c) => c.dataset.date).sort();
+  const from = dates[0], to = dates[dates.length - 1];
+  const inRange = (iso) => { const k = localKey(iso); return k && k >= from && k <= to; };
+
+  const agg = { created: 0, archived: 0, sessions: 0, notes: 0 };
+  const touched = new Map(); // id -> { t, evs:Set }
+  const touch = (t, ev) => {
+    let r = touched.get(t.id);
+    if (!r) { r = { t, evs: new Set() }; touched.set(t.id, r); }
+    r.evs.add(ev);
+  };
+  for (const t of LAST?.tasks || []) {
+    if (inRange(t.created_at)) { agg.created++; touch(t, "created"); }
+    if (t.state === "archived" && inRange(t.updated_at)) { agg.archived++; touch(t, "archived"); }
+    for (const s of t.sessions || []) if (inRange(s.started_at)) { agg.sessions++; touch(t, "session"); }
+    for (const n of t.notes || []) if (inRange(n.at)) { agg.notes++; touch(t, "note"); }
+  }
+  const total = agg.created + agg.archived + agg.sessions + agg.notes;
+
+  const kind = actSelected[0];
+  const modeLabel = kind === "d" ? "当日" : kind === "w" ? "当周" : "当月";
+  const title = kind === "d" ? from : kind === "m" ? from.slice(0, 7) : `${from} → ${to}`;
 
   host.hidden = false;
   host.innerHTML = "";
+  if (fresh) { host.classList.remove("ld-pop"); void host.offsetWidth; host.classList.add("ld-pop"); }
 
   const head = el("div", "ld-head");
-  head.appendChild(el("span", "ld-name", lane.replace("lane:", "")));
+  head.appendChild(el("span", "ld-name", `${modeLabel} · ${title}`));
   const close = el("button", "ld-close", "✕");
   close.type = "button";
-  close.onclick = () => {
-    selectedLane = null;
-    for (const p of $("chartLanes").querySelectorAll(".lane-pill")) p.classList.remove("is-on");
-    renderLaneDetail();
-  };
+  close.onclick = () => { actSelected = null; markSelected(); renderActDetail(); };
   head.appendChild(close);
   host.appendChild(head);
 
@@ -294,160 +500,33 @@ function renderLaneDetail() {
     s.appendChild(el("div", "ld-l", label));
     return s;
   };
-  stats.appendChild(stat("任务", st.total));
-  stats.appendChild(stat("进行中", st.processing, "is-proc"));
-  stats.appendChild(stat("未完成", st.total - st.archived, "is-open"));
-  stats.appendChild(stat("已归档", st.archived, "is-arch"));
+  stats.appendChild(stat("新增", agg.created, "is-c"));
+  stats.appendChild(stat("归档", agg.archived, "is-arch"));
+  stats.appendChild(stat("会话", agg.sessions, "is-proc"));
+  stats.appendChild(stat("笔记", agg.notes, "is-open"));
   host.appendChild(stats);
 
-  const rangeLabel = chartRange === "day" ? "近 30 天" : "近 12 周";
-  const sub = el("div", "ld-sub");
-  sub.innerHTML =
-    `${rangeLabel} · <span class="su-c">创建 ${c}</span> · ` +
-    `<span class="su-a">归档 ${a}</span> · <span class="su-n">未完成 ${open}</span>`;
-  host.appendChild(sub);
+  if (total === 0) { host.appendChild(el("div", "ld-sub", "这段时间没有活动")); return; }
 
-  if (series.some((d) => d.created || d.archived)) host.appendChild(laneSparkline(host, series));
-}
+  host.appendChild(el("div", "ld-sub", `共 ${total} 次活动 · ${touched.size} 个任务被触达`));
 
-// compact created/archived sparkline for the lane detail card
-function laneSparkline(host, series) {
-  const W = Math.max(240, Math.round(host.clientWidth) || 600);
-  const H = 54;
-  const n = series.length;
-  const gw = W / n;
-  const max = Math.max(1, ...series.map((d) => Math.max(d.created, d.archived)));
-  const bw = Math.max(1.5, Math.min(8, gw * 0.34));
-  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", height: String(H), class: "ld-spark" });
-  series.forEach((d, i) => {
-    const cx = gw * i + gw / 2;
-    if (d.created > 0) {
-      const h = (d.created / max) * (H - 2);
-      svg.appendChild(svgEl("rect", { x: cx - bw - 0.5, y: H - h, width: bw, height: h, rx: 1.5, class: "tp-bar-c" }));
-    }
-    if (d.archived > 0) {
-      const h = (d.archived / max) * (H - 2);
-      svg.appendChild(svgEl("rect", { x: cx + 0.5, y: H - h, width: bw, height: h, rx: 1.5, class: "tp-bar-a" }));
-    }
-  });
-  return svg;
-}
-
-function renderThroughput() {
-  const host = $("throughputChart");
-  if (!host) return;
-  const tp = LAST?.stats?.throughput;
-  const series = tp?.[chartRange] || [];
-
-  const totC = series.reduce((s, d) => s + d.created, 0);
-  const totA = series.reduce((s, d) => s + d.archived, 0);
-  const net = totC - totA;
-  const lanesN = tp?.lanes?.length || 0;
-  const sumEl = $("chartSummary");
-  if (sumEl) {
-    const sign = net > 0 ? "+" : "";
-    sumEl.innerHTML =
-      `<span class="su su-c">创建 <b>${totC}</b></span>` +
-      `<span class="su su-a">归档 <b>${totA}</b></span>` +
-      `<span class="su su-n">净 <b>${sign}${net}</b></span>` +
-      (lanesN ? `<span class="su su-m">主线 <b>${lanesN}</b></span>` : "");
+  const evLabel = { created: "新增", archived: "归档", session: "会话", note: "笔记" };
+  const evCls = { created: "is-c", archived: "is-arch", session: "is-proc", note: "" };
+  const list = el("div", "act-list");
+  for (const { t, evs } of touched.values()) {
+    const row = el("button", "act-row");
+    row.type = "button";
+    row.onclick = () => openDrawer(t.id);
+    const left = el("div", "ar-left");
+    left.appendChild(el("span", "ar-id", t.id));
+    left.appendChild(el("span", "ar-title", t.title));
+    row.appendChild(left);
+    const tags = el("div", "ar-tags");
+    for (const ev of evs) tags.appendChild(el("span", "ar-ev " + evCls[ev], evLabel[ev]));
+    row.appendChild(tags);
+    list.appendChild(row);
   }
-
-  if (!series.length) { host.replaceChildren(el("div", "empty-note", "—")); renderLaneBar(); return; }
-
-  // coordinate system matches the container's pixel width (no distortion)
-  const W = Math.max(320, Math.round(host.clientWidth) || 900);
-  const H = 240;
-  const padL = 30, padR = 34, padT = 14, padB = 30;
-  const plotW = W - padL - padR;
-  const plotH = H - padT - padB;
-  const n = series.length;
-  const groupW = plotW / n;
-
-  const maxBar = Math.max(1, ...series.map((d) => Math.max(d.created, d.archived)));
-  const maxOpen = Math.max(1, ...series.map((d) => d.open));
-
-  const yBar = (v) => padT + plotH - (v / maxBar) * plotH;
-  const yOpen = (v) => padT + plotH - (v / maxOpen) * plotH;
-  const xCenter = (i) => padL + groupW * i + groupW / 2;
-
-  const svg = svgEl("svg", {
-    viewBox: `0 0 ${W} ${H}`, width: "100%", height: String(H), class: "tp-svg", role: "img",
-  });
-
-  // horizontal gridlines + left axis labels (bar scale)
-  const ticks = 4;
-  for (let i = 0; i <= ticks; i++) {
-    const v = Math.round((maxBar / ticks) * i);
-    const y = yBar(v);
-    svg.appendChild(svgEl("line", { x1: padL, y1: y, x2: W - padR, y2: y, class: "tp-grid" }));
-    const lbl = svgEl("text", { x: padL - 6, y: y + 3, class: "tp-axis tp-axis-l" });
-    lbl.textContent = String(v);
-    svg.appendChild(lbl);
-  }
-  // right axis max label (open/burndown scale)
-  const rMax = svgEl("text", { x: W - padR + 6, y: yOpen(maxOpen) + 3, class: "tp-axis tp-axis-r" });
-  rMax.textContent = String(maxOpen);
-  svg.appendChild(rMax);
-
-  // paired bars
-  const barW = Math.max(2, Math.min(14, groupW * 0.32));
-  const gap = Math.max(1, groupW * 0.06);
-  const showEveryLabel = n <= 14 ? 1 : Math.ceil(n / 14);
-  series.forEach((d, i) => {
-    const cx = xCenter(i);
-    const xC = cx - barW - gap / 2;
-    const xA = cx + gap / 2;
-
-    if (d.created > 0) {
-      const y = yBar(d.created);
-      const r = svgEl("rect", { x: xC, y, width: barW, height: padT + plotH - y, rx: 2, class: "tp-bar tp-bar-c" });
-      r.appendChild(svgEl("title", {})).textContent = `${d.key} · 创建 ${d.created}`;
-      svg.appendChild(r);
-      const vl = svgEl("text", { x: xC + barW / 2, y: Math.max(9, y - 3), class: "tp-val tp-val-c" });
-      vl.textContent = String(d.created);
-      svg.appendChild(vl);
-    }
-    if (d.archived > 0) {
-      const y = yBar(d.archived);
-      const r = svgEl("rect", { x: xA, y, width: barW, height: padT + plotH - y, rx: 2, class: "tp-bar tp-bar-a" });
-      r.appendChild(svgEl("title", {})).textContent = `${d.key} · 归档 ${d.archived}`;
-      svg.appendChild(r);
-      const vl = svgEl("text", { x: xA + barW / 2, y: Math.max(9, y - 3), class: "tp-val tp-val-a" });
-      vl.textContent = String(d.archived);
-      svg.appendChild(vl);
-    }
-    // x label (thinned to avoid crowding)
-    if (i % showEveryLabel === 0) {
-      const t = svgEl("text", { x: cx, y: H - padB + 16, class: "tp-axis tp-axis-x" });
-      t.textContent = bucketLabel(d.key);
-      svg.appendChild(t);
-    }
-  });
-
-  // burndown line: open tasks over time (soft area fill underneath for depth)
-  const base = padT + plotH;
-  const linePts = series.map((d, i) => `${xCenter(i)},${yOpen(d.open)}`);
-  const areaPts = `${xCenter(0)},${base} ${linePts.join(" ")} ${xCenter(n - 1)},${base}`;
-  svg.appendChild(svgEl("polygon", { points: areaPts, class: "tp-area" }));
-  svg.appendChild(svgEl("polyline", { points: linePts.join(" "), class: "tp-line" }));
-  series.forEach((d, i) => {
-    const cx = xCenter(i);
-    const cy = yOpen(d.open);
-    const dot = svgEl("circle", { cx, cy, r: 2.6, class: "tp-dot" });
-    dot.appendChild(svgEl("title", {})).textContent = `${d.key} · 未完成 ${d.open}`;
-    svg.appendChild(dot);
-    // label only where the line moves (or the last point) to keep it readable
-    const changed = i === 0 || d.open !== series[i - 1].open;
-    if ((changed || i === n - 1) && d.open > 0) {
-      const lbl = svgEl("text", { x: cx, y: Math.max(9, cy - 6), class: "tp-val tp-val-o" });
-      lbl.textContent = String(d.open);
-      svg.appendChild(lbl);
-    }
-  });
-
-  host.replaceChildren(svg);
-  renderLaneBar();
+  host.appendChild(list);
 }
 
 /* ── notes formatting ────────────────────────────────────── */
@@ -683,24 +762,22 @@ function closeDrawer() {
 $("scrim").onclick = closeDrawer;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
 
-// throughput range toggle (按日 / 按周)
-$("rangeToggle")?.addEventListener("click", (e) => {
+// activity heatmap mode toggle (按天 / 按周 / 按月)
+$("actMode")?.addEventListener("click", (e) => {
   const btn = e.target.closest(".seg-btn");
   if (!btn) return;
-  const r = btn.dataset.range;
-  if (!r || r === chartRange) return;
-  chartRange = r;
-  for (const b of $("rangeToggle").querySelectorAll(".seg-btn")) {
-    b.classList.toggle("is-on", b.dataset.range === r);
+  const m = btn.dataset.mode;
+  if (!m || m === actMode) return;
+  actMode = m;
+  for (const b of $("actMode").querySelectorAll(".seg-btn")) {
+    b.classList.toggle("is-on", b.dataset.mode === m);
   }
-  renderThroughput();
-});
-
-// re-render chart on resize (SVG is sized to the container's pixel width)
-let resizeT = null;
-window.addEventListener("resize", () => {
-  clearTimeout(resizeT);
-  resizeT = setTimeout(renderThroughput, 150);
+  actSelected = null; // the selection unit changed → drop the open interval
+  hotAnchor = null;
+  clearHmHot();
+  hideTip();
+  markSelected();
+  renderActDetail();
 });
 
 // "updated Ns ago" ticker
