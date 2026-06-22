@@ -1,8 +1,8 @@
-/* pops dashboard — vanilla JS, polls /api/data every 5s */
+/* tack dashboard — vanilla JS, polls /api/data every 5s */
 
 /* ── theme: follow system by default, manual override persists ── */
 (function initTheme() {
-  const KEY = "pops-theme";
+  const KEY = "tack-theme";
   const mq = window.matchMedia("(prefers-color-scheme: light)");
   const systemTheme = () => (mq.matches ? "light" : "dark");
   const apply = (t) => document.documentElement.setAttribute("data-theme", t);
@@ -88,7 +88,7 @@ async function load() {
       fillDrawer(openTaskId);
     }
   } catch (e) {
-    $("brandSub").textContent = "连接断开 — pops web 是否还在运行?";
+    $("brandSub").textContent = "连接断开 — tack web 是否还在运行?";
   }
 }
 

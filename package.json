@@ -1,10 +1,10 @@
 {
-  "name": "pops",
-  "module": "bin/pops.ts",
+  "name": "tack-cli",
+  "module": "bin/tack.ts",
   "type": "module",
   "private": true,
   "bin": {
-    "pops": "bin/pops.ts"
+    "tack": "bin/tack.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

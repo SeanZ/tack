@@ -5,11 +5,11 @@ import { join, dirname, basename } from "path";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "fs";
 
 // Code/assets travel with the script (bin/.. = repo root); data + config live
-// under ~/.pops so the tool can be shared without dragging personal data along.
+// under ~/.tack so the tool can be shared without dragging personal data along.
 const CODE_ROOT = join(import.meta.dir, "..");
-const POPS_HOME = process.env.POPS_HOME ?? `${process.env.HOME}/.pops`;
-const CONFIG_FILE = join(POPS_HOME, "config.json");
-// DATA_ROOT resolved at startup: POPS_DATA_DIR env > config.data_dir > ~/.pops/data
+const TACK_HOME = process.env.TACK_HOME ?? `${process.env.HOME}/.tack`;
+const CONFIG_FILE = join(TACK_HOME, "config.json");
+// DATA_ROOT resolved at startup: TACK_DATA_DIR env > config.data_dir > ~/.tack/data
 const DATA_ROOT = resolveDataRoot();
 const TASKS_FILE = join(DATA_ROOT, "tasks.jsonl");
 const TASKS_DIR = join(DATA_ROOT, "tasks");
@@ -19,7 +19,7 @@ function expandHome(p: string): string {
 }
 
 function resolveDataRoot(): string {
-  if (process.env.POPS_DATA_DIR) return process.env.POPS_DATA_DIR;
+  if (process.env.TACK_DATA_DIR) return process.env.TACK_DATA_DIR;
   try {
     if (existsSync(CONFIG_FILE)) {
       const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
@@ -28,7 +28,7 @@ function resolveDataRoot(): string {
   } catch {
     /* malformed config: fall through to default */
   }
-  return join(POPS_HOME, "data");
+  return join(TACK_HOME, "data");
 }
 
 type Box = "inbox" | "processing" | "backlog" | "archived";
@@ -78,7 +78,7 @@ interface Task {
 // ---- Helpers ----
 
 function die(msg: string, code = 1): never {
-  console.error(`pops: ${msg}`);
+  console.error(`tack: ${msg}`);
   process.exit(code);
 }
 
@@ -301,10 +301,10 @@ async function firstPromptOf(path: string): Promise<string> {
 
 // ---- Commands ----
 
-const cli = cac("pops");
+const cli = cac("tack");
 
-cli.command("init", "Initialize ~/.pops home + data dir (idempotent)").action(async () => {
-  mkdirSync(POPS_HOME, { recursive: true });
+cli.command("init", "Initialize ~/.tack home + data dir (idempotent)").action(async () => {
+  mkdirSync(TACK_HOME, { recursive: true });
   mkdirSync(DATA_ROOT, { recursive: true });
   mkdirSync(TASKS_DIR, { recursive: true });
   if (!existsSync(TASKS_FILE)) await Bun.write(TASKS_FILE, "");
@@ -331,7 +331,7 @@ cli.command("init", "Initialize ~/.pops home + data dir (idempotent)").action(as
       /* git optional */
     }
   }
-  console.log(`pops home ready at ${POPS_HOME}`);
+  console.log(`tack home ready at ${TACK_HOME}`);
   console.log(`  config: ${CONFIG_FILE}`);
   console.log(`  data:   ${DATA_ROOT} (git-managed; add a private remote + push to back up)`);
 });
@@ -738,7 +738,7 @@ cli
     const cfg = await loadConfig();
     const task = findTask(id, tasks);
     const lines: string[] = [];
-    lines.push(`# pops task ${task.id} — ${task.title}`);
+    lines.push(`# tack task ${task.id} — ${task.title}`);
     const et = effectiveTarget(task, cfg);
     lines.push(`state: ${task.state}` + (task.repo ? ` · repo: ${task.repo}` : "") +
       (et.value ? ` · target: ${et.value}` : ""));
@@ -753,7 +753,7 @@ cli
       lines.push(`recent notes:`);
       for (const n of recent) lines.push(`  - ${n.text}`);
     }
-    lines.push(`(管理本任务用 pops 命令; 收尾时说"归档当前会话"即可记录进度)`);
+    lines.push(`(管理本任务用 tack 命令; 收尾时说"归档当前会话"即可记录进度)`);
     console.log(lines.join("\n"));
   });
 
@@ -887,14 +887,14 @@ async function setupCc(): Promise<void> {
         group.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes(command))
     );
     if (already) {
-      console.log(`${event}: pops hook already present, skipped`);
+      console.log(`${event}: tack hook already present, skipped`);
       return false;
     }
     arr.push({
       matcher: "",
       hooks: [{ type: "command", command, timeout: 10 }],
     });
-    console.log(`${event}: + pops ${label}`);
+    console.log(`${event}: + tack ${label}`);
     return true;
   };
 
@@ -903,13 +903,13 @@ async function setupCc(): Promise<void> {
   changed = ensureHook("SessionEnd", endHook, "SessionEnd") || changed;
 
   if (!changed) {
-    console.log("nothing to do (all pops hooks already installed)");
+    console.log("nothing to do (all tack hooks already installed)");
     return;
   }
 
   await Bun.write(SETTINGS, JSON.stringify(settings, null, 2) + "\n");
   console.log(`updated ${SETTINGS}`);
-  console.log(`\nNext: inside a CC session, 'pops note <id> ...' auto-links the session;`);
+  console.log(`\nNext: inside a CC session, 'tack note <id> ...' auto-links the session;`);
   console.log(`SessionEnd then writes a best-effort digest, and resuming injects the task brief.`);
 }
 
@@ -1080,11 +1080,11 @@ cli
         },
       });
     } catch (e: any) {
-      die(`failed to listen on :${port} — ${e?.message ?? e} (try pops web --port <other>)`);
+      die(`failed to listen on :${port} — ${e?.message ?? e} (try tack web --port <other>)`);
     }
 
     const urlStr = `http://localhost:${port}`;
-    console.log(`pops dashboard → ${urlStr}  (Ctrl+C to stop)`);
+    console.log(`tack dashboard → ${urlStr}  (Ctrl+C to stop)`);
     if (opts.open !== false) {
       try {
         Bun.spawn(["open", urlStr], { stdout: "ignore", stderr: "ignore" });
@@ -1093,7 +1093,7 @@ cli
       }
     }
     process.on("SIGINT", () => {
-      console.log("\npops dashboard stopped.");
+      console.log("\ntack dashboard stopped.");
       server?.stop?.();
       process.exit(0);
     });
@@ -1133,7 +1133,7 @@ cli.help();
 cli.version("0.1.0");
 
 try {
-  // `pops task <verb> ...` is a pure alias for `pops <verb> ...` — agents reach
+  // `tack task <verb> ...` is a pure alias for `tack <verb> ...` — agents reach
   // for a `task` namespace, so accept it and forward to the flat command.
   const argv = process.argv.slice();
   if (argv[2] === "task") argv.splice(2, 1);

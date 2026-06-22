@@ -1,5 +1,5 @@
 {
-  "data_dir": "~/.pops/data",
+  "data_dir": "~/.tack/data",
   "default_target": "cc",
   "agents": ["agentA", "agentB"],
   "default_handoff_target": "agentA",

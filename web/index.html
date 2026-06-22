@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>pops · dashboard</title>
+  <title>tack · dashboard</title>
   <script>
     // no-flash theme: set before first paint (saved choice, else system)
     (function () {
       try {
-        var s = localStorage.getItem("pops-theme");
+        var s = localStorage.getItem("tack-theme");
         var t = s || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
         document.documentElement.setAttribute("data-theme", t);
       } catch (e) {}
@@ -27,7 +27,7 @@
   <header class="topbar">
     <div class="brand">
       <span class="dot"></span>
-      <span class="wordmark">pops</span>
+      <span class="wordmark">tack</span>
       <span class="brand-sub" id="brandSub">loading…</span>
     </div>
     <div class="topbar-right">
@@ -81,7 +81,7 @@
     </section>
 
     <footer class="foot">
-      <span>pops dashboard · 只读视图 · 增删改走 CLI / skill</span>
+      <span>tack dashboard · 只读视图 · 增删改走 CLI / skill</span>
     </footer>
   </main>
 

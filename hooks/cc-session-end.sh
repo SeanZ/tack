@@ -1,5 +1,5 @@
 #!/bin/bash
-# pops SessionEnd hook for Claude Code
+# tack SessionEnd hook for Claude Code
 # - Reads JSON from stdin (has session_id, transcript_path, reason, etc.)
 # - Reverse-looks up the task that owns this session uuid; if found, writes a
 #   best-effort digest. (Primary digest paths are `show` lazy-gen and archive;
@@ -21,17 +21,17 @@ fi
 
 UUID=$(basename "$TRANSCRIPT" .jsonl)
 
-POPS_BIN=$(command -v pops || true)
-if [ -z "$POPS_BIN" ]; then
-  POPS_BIN="$HOME/.local/bin/pops"
+TACK_BIN=$(command -v tack || true)
+if [ -z "$TACK_BIN" ]; then
+  TACK_BIN="$HOME/.local/bin/tack"
 fi
-if [ ! -x "$POPS_BIN" ]; then
+if [ ! -x "$TACK_BIN" ]; then
   exit 0
 fi
 
-TASK=$("$POPS_BIN" which "$UUID" 2>/dev/null | head -1 | cut -f1)
+TASK=$("$TACK_BIN" which "$UUID" 2>/dev/null | head -1 | cut -f1)
 if [ -n "$TASK" ]; then
-  "$POPS_BIN" digest \
+  "$TACK_BIN" digest \
     --task "$TASK" \
     --session "$UUID" \
     --transcript "$TRANSCRIPT" >/dev/null 2>&1 || true

@@ -2,7 +2,7 @@ node_modules/
 *.log
 .DS_Store
 
-# data + machine-local config live under ~/.pops, never in the tool repo.
+# data + machine-local config live under ~/.tack, never in the tool repo.
 # These guards also catch accidental local copies inside the checkout.
 /config.json
 /data/
